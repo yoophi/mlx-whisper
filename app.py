@@ -1,87 +1,175 @@
 import rumps
 import pyaudio
-import numpy as np
 import threading
 import tempfile
 import wave
 import json
 import os
 from pathlib import Path
+import queue
+import traceback
+import time
 
 import mlx_whisper
 import pyperclip
 import pyautogui
 from pynput import keyboard
 
+LANG_BADGE = {"ko": "KR", "en": "EN", "vi": "VN", "ja": "JP", "zh": "CH"}
 
 class VoiceRecorderApp(rumps.App):
     def __init__(self):
         super().__init__("🎤", quit_button=None)
-        
+
         # 설정 로드
         self.config_path = Path.home() / ".config" / "voice-recorder" / "config.json"
         self.load_config()
-        
+        self.title = f"🎤{LANG_BADGE.get(self.config['language'], self.config['language'].upper())}"
         # 오디오 설정
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1
         self.RATE = 16000
         self.CHUNK = 1024
-        
+
         self.is_recording = False
         self.frames = []
         self.audio = pyaudio.PyAudio()
         self.stream = None
         self.record_thread = None
-        
+
+        # UI 작업 큐(메인 루프에서만 UI 변경/notification 실행)
+        self._uiq: "queue.Queue[callable]" = queue.Queue()
+
+        # 핫키 이벤트 (pynput 스레드 -> event set -> 메인 타이머 처리)
+        self._toggle_event = threading.Event()
+        self._lang_event = threading.Event()
+
+        # 타이머: UI 큐 drain + 이벤트 처리
+        self._ui_timer = rumps.Timer(self._drain_mainloop, 0.05)
+        self._ui_timer.start()
+
         # 단축키 리스너
         self.hotkey_listener = None
         self.setup_hotkey()
-        
+
         # 메뉴 구성
         self.build_menu()
-    
+
+    # ---------------------------
+    # Config
+    # ---------------------------
     def load_config(self):
         """설정 파일 로드"""
         default_config = {
-            "hotkey": "cmd+shift+space",
+            # 녹음 토글 단축키(기본값 변경)
+            "record_hotkey": "ctrl+shift+m",
+
+            # 언어 스위치(순환) 전용 단축키: cmd+shift+space
+            # 요청대로 녹음 단축키 목록에서 제거하고, 언어 전환용으로 사용
+            "lang_hotkey": "cmd+shift+space",
+
             "language": "ko",
-            "model": "mlx-community/whisper-large-v3-turbo"
+            "model": "mlx-community/whisper-large-v3-turbo",
         }
-        
+
+        cfg = {}
         try:
             if self.config_path.exists():
-                with open(self.config_path, "r") as f:
-                    self.config = {**default_config, **json.load(f)}
-            else:
-                self.config = default_config
-        except:
-            self.config = default_config
-    
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f) or {}
+        except Exception:
+            cfg = {}
+
+        # 구버전 호환: 예전 key가 "hotkey"면 record_hotkey로 흡수
+        if "record_hotkey" not in cfg and "hotkey" in cfg:
+            cfg["record_hotkey"] = cfg["hotkey"]
+
+        # merge defaults
+        self.config = {**default_config, **cfg}
+
+        # record_hotkey가 없으면 안전하게 기본값
+        if not self.config.get("record_hotkey"):
+            self.config["record_hotkey"] = default_config["record_hotkey"]
+        if not self.config.get("lang_hotkey"):
+            self.config["lang_hotkey"] = default_config["lang_hotkey"]
+
     def save_config(self):
         """설정 파일 저장"""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.config_path, "w") as f:
-            json.dump(self.config, f, indent=2)
-    
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, indent=2, ensure_ascii=False)
+
+    # ---------------------------
+    # UI helpers (main thread via queue)
+    # ---------------------------
+    def _ui(self, fn):
+        """메인 루프에서 실행할 UI 작업 등록"""
+        self._uiq.put(fn)
+
+    def _notify(self, title, subtitle, message):
+        """notification도 메인 루프에서 실행"""
+        def _do():
+            try:
+                rumps.notification(title, subtitle, message)
+            except Exception:
+                # 알림 실패는 치명적이지 않음
+                pass
+        self._ui(_do)
+
+    def _drain_mainloop(self, _):
+        """메인 루프에서: 이벤트 처리 + UI 큐 실행"""
+        # 1) 핫키 이벤트 처리
+        if self._toggle_event.is_set():
+            self._toggle_event.clear()
+            self.toggle_recording(None)
+
+        if self._lang_event.is_set():
+            self._lang_event.clear()
+            self.cycle_language()
+
+        # 2) UI 큐 drain
+        for _ in range(50):  # 한 tick에 과도 실행 방지
+            try:
+                fn = self._uiq.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception:
+                # 디버그용: 여기서 죽으면 앱이 조용히 종료될 수 있어서 방어
+                traceback.print_exc()
+
+    # ---------------------------
+    # Menu
+    # ---------------------------
     def build_menu(self):
         """메뉴 구성"""
         self.menu.clear()
-        
+
+        record_hk = self.config.get("record_hotkey", "")
+        lang_hk = self.config.get("lang_hotkey", "")
+        lang_code = self.config.get("language", "ko")
+
         # 녹음 상태
         status = "🔴 녹음 중지" if self.is_recording else "녹음 시작"
         self.status_item = rumps.MenuItem(
-            f"{status} ({self.format_hotkey(self.config['hotkey'])})",
+            f"{status} ({self.format_hotkey(record_hk)})",
             callback=self.toggle_recording
         )
         self.menu.add(self.status_item)
-        
+
+        # 언어 스위치 안내 (고정 단축키)
+        self.menu.add(rumps.MenuItem(
+            f"언어 전환: {self.format_hotkey(lang_hk)}  (현재: {lang_code})",
+            callback=None
+        ))
+
         self.menu.add(rumps.separator)
-        
-        # 단축키 설정
-        hotkey_menu = rumps.MenuItem("단축키 설정")
+
+        # 단축키 설정(녹음 토글용) — 요청대로 cmd+shift+space 제외
+        hotkey_menu = rumps.MenuItem("녹음 단축키 설정")
         hotkeys = [
-            ("cmd+shift+space", "⌘⇧Space"),
+            ("ctrl+shift+m", "⌃⇧M"),
             ("cmd+shift+r", "⌘⇧R"),
             ("alt+space", "⌥Space"),
             ("cmd+alt+space", "⌘⌥Space"),
@@ -89,42 +177,74 @@ class VoiceRecorderApp(rumps.App):
         ]
         for key, label in hotkeys:
             item = rumps.MenuItem(
-                f"{'✓ ' if self.config['hotkey'] == key else '   '}{label}",
-                callback=lambda sender, k=key: self.set_hotkey(k)
+                f"{'✓ ' if record_hk == key else '   '}{label}",
+                callback=lambda sender, k=key: self.set_record_hotkey(k)
             )
             hotkey_menu.add(item)
         self.menu.add(hotkey_menu)
-        
-        # 언어 설정
-        lang_menu = rumps.MenuItem("언어")
-        languages = [("ko", "한국어"), ("en", "English"), ("ja", "日本語"), ("zh", "中文")]
+
+        # 언어 설정(직접 선택)
+        lang_menu = rumps.MenuItem("전사 언어")
+        languages = [
+            ("ko", "한국어"),
+            ("en", "English"),
+            ("ja", "日本語"),
+            ("zh", "中文"),
+            ("vi", "Tiếng Việt"),
+        ]
         for code, name in languages:
             item = rumps.MenuItem(
-                f"{'✓ ' if self.config['language'] == code else '   '}{name}",
+                f"{'✓ ' if lang_code == code else '   '}{name}",
                 callback=lambda sender, c=code: self.set_language(c)
             )
             lang_menu.add(item)
         self.menu.add(lang_menu)
-        
+
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("종료", callback=self.quit_app))
-    
-    def format_hotkey(self, hotkey):
+
+    def format_hotkey(self, hotkey: str) -> str:
         """단축키를 보기 좋게 포맷"""
+        if not hotkey:
+            return "-"
         replacements = {
-            "cmd": "⌘", "shift": "⇧", "alt": "⌥", 
+            "cmd": "⌘", "shift": "⇧", "alt": "⌥",
             "ctrl": "⌃", "space": "Space", "+": ""
         }
-        result = hotkey
+        result = hotkey.lower()
         for k, v in replacements.items():
             result = result.replace(k, v)
         return result
-    
-    def parse_hotkey_for_pynput(self, hotkey):
-        """pynput용 단축키 파싱"""
-        parts = hotkey.lower().split("+")
+
+    # ---------------------------
+    # Hotkey parsing/normalization
+    # ---------------------------
+    def _norm_key(self, key):
+        """pynput key를 비교 가능한 표준 형태로 정규화"""
+        # modifiers canonicalize
+        if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
+            return keyboard.Key.ctrl
+        if key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r):
+            return keyboard.Key.shift
+        if key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr):
+            return keyboard.Key.alt
+        if key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r):
+            return keyboard.Key.cmd
+        if key == keyboard.Key.space:
+            return keyboard.Key.space
+
+        # characters
+        if isinstance(key, keyboard.KeyCode) and key.char:
+            return ("char", key.char.lower())
+
+        return key
+
+    def parse_hotkey_for_pynput(self, hotkey: str):
+        """pynput용 단축키 파싱 -> 정규화된 키 set 반환"""
+        parts = (hotkey or "").lower().split("+")
         keys = set()
         for part in parts:
+            part = part.strip()
             if part == "cmd":
                 keys.add(keyboard.Key.cmd)
             elif part == "shift":
@@ -136,154 +256,261 @@ class VoiceRecorderApp(rumps.App):
             elif part == "space":
                 keys.add(keyboard.Key.space)
             elif len(part) == 1:
-                keys.add(keyboard.KeyCode.from_char(part))
+                keys.add(("char", part))
         return keys
-    
+
     def setup_hotkey(self):
-        """글로벌 단축키 설정"""
+        """글로벌 단축키 설정 (녹음 토글 + 언어 전환)"""
         if self.hotkey_listener:
             self.hotkey_listener.stop()
-        
-        target_keys = self.parse_hotkey_for_pynput(self.config["hotkey"])
+
+        record_keys = self.parse_hotkey_for_pynput(self.config.get("record_hotkey", "ctrl+shift+space"))
+        lang_keys = self.parse_hotkey_for_pynput(self.config.get("lang_hotkey", "cmd+shift+space"))
+
         current_keys = set()
-        
+        fired_record = False
+        fired_lang = False
+
         def on_press(key):
-            current_keys.add(key)
-            if target_keys.issubset(current_keys):
-                self.toggle_recording(None)
-        
+            nonlocal fired_record, fired_lang
+            nk = self._norm_key(key)
+            current_keys.add(nk)
+
+            if (not fired_record) and record_keys.issubset(current_keys):
+                fired_record = True
+                self._toggle_event.set()
+
+            if (not fired_lang) and lang_keys.issubset(current_keys):
+                fired_lang = True
+                self._lang_event.set()
+
         def on_release(key):
-            current_keys.discard(key)
-        
+            nonlocal fired_record, fired_lang
+            nk = self._norm_key(key)
+            current_keys.discard(nk)
+
+            if not record_keys.issubset(current_keys):
+                fired_record = False
+            if not lang_keys.issubset(current_keys):
+                fired_lang = False
+
         self.hotkey_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self.hotkey_listener.start()
-    
-    def set_hotkey(self, hotkey):
-        """단축키 변경"""
-        self.config["hotkey"] = hotkey
+
+    # ---------------------------
+    # Settings actions
+    # ---------------------------
+    def set_record_hotkey(self, hotkey: str):
+        """녹음 단축키 변경"""
+        self.config["record_hotkey"] = hotkey
         self.save_config()
         self.setup_hotkey()
         self.build_menu()
-        rumps.notification("음성 인식", "", f"단축키가 {self.format_hotkey(hotkey)}로 변경되었습니다.")
-    
-    def set_language(self, lang):
-        """언어 변경"""
+        self._notify("음성 인식", "", f"녹음 단축키: {self.format_hotkey(hotkey)}")
+
+    def set_language(self, lang: str):
+        """언어 변경(직접 선택)"""
         self.config["language"] = lang
         self.save_config()
         self.build_menu()
-        lang_names = {"ko": "한국어", "en": "English", "ja": "日本語", "zh": "中文"}
-        rumps.notification("음성 인식", "", f"언어가 {lang_names[lang]}로 변경되었습니다.")
-    
+        lang_names = {
+            "ko": "한국어",
+            "en": "English",
+            "ja": "日本語",
+            "zh": "中文",
+            "vi": "Tiếng Việt",
+        }
+        self._notify("음성 인식", "", f"전사 언어: {lang_names.get(lang, lang)}")
+
+    def cycle_language(self):
+        """언어 순환 전환 (cmd+shift+space)"""
+        order = ["ko", "en", "vi", "ja", "zh"]  # 원하는 순서로 조정 가능
+        cur = self.config.get("language", "ko")
+        try:
+            nxt = order[(order.index(cur) + 1) % len(order)]
+        except ValueError:
+            nxt = "ko"
+
+        self.config["language"] = nxt
+        self.save_config()
+        self.build_menu()
+        self._notify("음성 인식", "", f"전사 언어 전환: {nxt}")
+        badge = LANG_BADGE.get(self.config["language"], self.config["language"].upper())
+        if str(self.title).startswith("🔴"):
+            self.title = f"🔴{badge}"
+        elif str(self.title).startswith("⏳"):
+            self.title = f"⏳{badge}"
+        else:
+            self.title = f"🎤{badge}"
+    # ---------------------------
+    # Recording
+    # ---------------------------
     def toggle_recording(self, sender):
         """녹음 토글"""
         if self.is_recording:
             self.stop_recording()
         else:
             self.start_recording()
-    
+
     def start_recording(self):
         """녹음 시작"""
         if self.is_recording:
             return
-        
+
         self.is_recording = True
         self.frames = []
-        self.title = "🔴"
+
+        # UI 업데이트는 메인루프에서
+        self.title = f"🔴{LANG_BADGE.get(self.config['language'], self.config['language'].upper())}"
         self.build_menu()
-        
-        self.stream = self.audio.open(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.RATE,
-            input=True,
-            frames_per_buffer=self.CHUNK
-        )
-        
+
+        try:
+            self.stream = self.audio.open(
+                format=self.FORMAT,
+                channels=self.CHANNELS,
+                rate=self.RATE,
+                input=True,
+                frames_per_buffer=self.CHUNK
+            )
+        except Exception as e:
+            self.is_recording = False
+            self.title = f"🎤{LANG_BADGE.get(self.config['language'], self.config['language'].upper())}"
+            self.build_menu()
+            self._notify("오디오 오류", "", str(e)[:120])
+            return
+
         def record():
             while self.is_recording:
                 try:
                     data = self.stream.read(self.CHUNK, exception_on_overflow=False)
                     self.frames.append(data)
-                except:
+                except Exception as e:
+                    # 백그라운드 스레드 -> 메인루프 알림
+                    self._notify("오디오 오류", "", str(e)[:120])
                     break
-        
+
         self.record_thread = threading.Thread(target=record, daemon=True)
         self.record_thread.start()
-    
+
     def stop_recording(self):
         """녹음 중지 및 전사"""
         if not self.is_recording:
             return
-        
+
         self.is_recording = False
-        self.title = "⏳"
-        
+        self.title = f"⏳{LANG_BADGE.get(self.config['language'], self.config['language'].upper())}"
+        self.build_menu()
+
         if self.record_thread:
             self.record_thread.join(timeout=1)
-        
+
         if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
+            try:
+                self.stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.stream.close()
+            except Exception:
+                pass
             self.stream = None
-        
+
         if not self.frames:
-            self.title = "🎤"
+            self.title = f"🎤{LANG_BADGE.get(self.config['language'], self.config['language'].upper())}"
             self.build_menu()
             return
-        
-        # 별도 스레드에서 전사 처리
-        threading.Thread(target=self.transcribe_and_paste, daemon=True).start()
-    
-    def transcribe_and_paste(self):
-        """전사 및 붙여넣기"""
+
+        frames_snapshot = self.frames[:]  # 전사 스레드에 안전하게 전달
+        self.frames = []
+
+        threading.Thread(target=self.transcribe_and_paste, args=(frames_snapshot,), daemon=True).start()
+
+    # ---------------------------
+    # Transcription
+    # ---------------------------
+    def transcribe_and_paste(self, frames_snapshot):
+        """전사 및 붙여넣기 (백그라운드)"""
+        temp_path = None
         try:
             # WAV 파일로 저장
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 temp_path = f.name
-                wf = wave.open(temp_path, 'wb')
-                wf.setnchannels(self.CHANNELS)
-                wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
-                wf.setframerate(self.RATE)
-                wf.writeframes(b''.join(self.frames))
-                wf.close()
-            
+
+            wf = wave.open(temp_path, "wb")
+            wf.setnchannels(self.CHANNELS)
+            wf.setsampwidth(self.audio.get_sample_size(self.FORMAT))
+            wf.setframerate(self.RATE)
+            wf.writeframes(b"".join(frames_snapshot))
+            wf.close()
+
             # mlx-whisper로 전사
             result = mlx_whisper.transcribe(
                 temp_path,
                 path_or_hf_repo=self.config["model"],
                 language=self.config["language"]
             )
-            text = result["text"].strip()
-            
-            # 임시 파일 삭제
-            os.unlink(temp_path)
-            
+            text = (result.get("text") or "").strip()
+
             if text:
-                # 클립보드에 복사
                 pyperclip.copy(text)
-                
-                # 현재 위치에 붙여넣기 (약간의 딜레이)
-                threading.Timer(0.1, lambda: pyautogui.hotkey("command", "v")).start()
-                
-                rumps.notification("음성 인식 완료", "", text[:50] + ("..." if len(text) > 50 else ""))
+
+                # 붙여넣기 (메인루프에서 실행하는 게 더 안전)
+                def do_paste():
+                    try:
+                        pyautogui.hotkey("command", "v")
+                    except Exception as e:
+                        self._notify("붙여넣기 오류", "", str(e)[:120])
+
+                # 약간 딜레이 후 메인루프에서 수행
+                time.sleep(0.1)
+                self._ui(do_paste)
+
+                self._notify("음성 인식 완료", "", text[:50] + ("..." if len(text) > 50 else ""))
             else:
-                rumps.notification("음성 인식", "", "인식된 텍스트가 없습니다.")
-        
+                self._notify("음성 인식", "", "인식된 텍스트가 없습니다.")
+
         except Exception as e:
-            rumps.notification("오류", "", str(e)[:100])
-        
+            self._notify("오류", "", str(e)[:160])
+
         finally:
-            self.title = "🎤"
-            self.frames = []
-            self.build_menu()
-    
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+
+            # UI 복귀
+            self._ui(lambda: setattr(self, "title", f"🎤{LANG_BADGE.get(self.config['language'], self.config['language'].upper())}"))
+            self._ui(self.build_menu)
+
+    # ---------------------------
+    # Quit
+    # ---------------------------
     def quit_app(self, sender):
         """앱 종료"""
-        if self.hotkey_listener:
-            self.hotkey_listener.stop()
-        if self.stream:
-            self.stream.close()
-        self.audio.terminate()
+        try:
+            if self.hotkey_listener:
+                self.hotkey_listener.stop()
+        except Exception:
+            pass
+
+        try:
+            if self._ui_timer:
+                self._ui_timer.stop()
+        except Exception:
+            pass
+
+        try:
+            if self.stream:
+                self.stream.close()
+        except Exception:
+            pass
+
+        try:
+            self.audio.terminate()
+        except Exception:
+            pass
+
         rumps.quit_application()
 
 
