@@ -1,7 +1,8 @@
 import Foundation
 import UserNotifications
 
-final class NotificationManager {
+final class NotificationManager: Notifying {
+    private let logger: Logging
 
     private var isAvailable: Bool {
         return Bundle.main.bundleIdentifier != nil
@@ -9,23 +10,27 @@ final class NotificationManager {
 
     private var permissionGranted = false
 
+    init(logger: Logging) {
+        self.logger = logger
+    }
+
     func requestPermission() {
         guard isAvailable else {
-            print("[Notification] No app bundle — using console output only")
+            logger.info("No app bundle — using console output only")
             return
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
             self?.permissionGranted = granted
             if granted {
-                print("[Notification] Permission granted")
+                self?.logger.info("Permission granted")
             } else {
-                print("[Notification] Permission not granted (normal for unsigned app)")
+                self?.logger.info("Permission not granted (normal for unsigned app)")
             }
         }
     }
 
     func send(title: String, body: String) {
-        print("📢 [\(title)] \(body)")
+        logger.info("[\(title)] \(body)")
 
         guard isAvailable, permissionGranted else { return }
 

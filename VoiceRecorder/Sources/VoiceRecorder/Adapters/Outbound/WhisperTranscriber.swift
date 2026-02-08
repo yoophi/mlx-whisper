@@ -1,14 +1,16 @@
 import Foundation
 import WhisperKit
 
-actor WhisperTranscriber {
+actor WhisperTranscriber: Transcribing {
     private var whisperKit: WhisperKit?
     private let modelName: String
     private var isLoading = false
     private let onProgress: @Sendable (ModelStatus) -> Void
+    private let logger: Logging
 
-    init(modelName: String, onProgress: @escaping @Sendable (ModelStatus) -> Void) {
+    init(modelName: String, logger: Logging, onProgress: @escaping @Sendable (ModelStatus) -> Void) {
         self.modelName = modelName
+        self.logger = logger
         self.onProgress = onProgress
     }
 
@@ -19,7 +21,7 @@ actor WhisperTranscriber {
     private func ensureModel() async throws {
         if whisperKit != nil { return }
         guard !isLoading else {
-            print("[Transcriber] Model already loading, waiting...")
+            logger.info("Model already loading, waiting...")
             while isLoading {
                 try await Task.sleep(nanoseconds: 100_000_000)
             }
@@ -31,25 +33,25 @@ actor WhisperTranscriber {
 
         let baseURL = WhisperTranscriber.modelBaseURL
         try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
-        print("[Transcriber] Model storage: \(baseURL.path)")
+        logger.info("Model storage: \(baseURL.path)")
 
         // Step 1: Download model with progress
-        print("[Transcriber] 📥 Downloading model: \(modelName)...")
+        logger.info("Downloading model: \(modelName)...")
         onProgress(.downloading(0))
 
         let modelURL = try await WhisperKit.download(
             variant: modelName,
             downloadBase: baseURL,
-            progressCallback: { [onProgress] progress in
+            progressCallback: { [onProgress, logger] progress in
                 let pct = Int(progress.fractionCompleted * 100)
-                print("[Transcriber] 📥 Download: \(pct)% (\(progress.completedUnitCount / 1_000_000)MB / \(progress.totalUnitCount / 1_000_000)MB)")
+                logger.info("Download: \(pct)% (\(progress.completedUnitCount / 1_000_000)MB / \(progress.totalUnitCount / 1_000_000)MB)")
                 onProgress(.downloading(pct))
             }
         )
-        print("[Transcriber] 📥 Download complete: \(modelURL.path)")
+        logger.info("Download complete: \(modelURL.path)")
 
         // Step 2: Load model into memory
-        print("[Transcriber] ⏳ Loading model into memory...")
+        logger.info("Loading model into memory...")
         onProgress(.loading)
 
         let config = WhisperKitConfig(
@@ -61,12 +63,12 @@ actor WhisperTranscriber {
         )
         whisperKit = try await WhisperKit(config)
 
-        print("[Transcriber] ✅ Model loaded successfully")
+        logger.info("Model loaded successfully")
         onProgress(.ready)
     }
 
     func transcribe(audioSamples: [Float], language: String) async throws -> String {
-        print("[Transcriber] Transcribing \(audioSamples.count) samples, language=\(language)")
+        logger.info("Transcribing \(audioSamples.count) samples, language=\(language)")
         try await ensureModel()
 
         guard let wk = whisperKit else {
@@ -77,16 +79,15 @@ actor WhisperTranscriber {
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
 
         let text = results.map { $0.text }.joined(separator: " ")
-        print("[Transcriber] Result: \"\(text)\"")
+        logger.info("Result: \"\(text)\"")
         return text
     }
 
-    /// Pre-download and load the model in the background
     func preload() async {
         do {
             try await ensureModel()
         } catch {
-            print("[Transcriber] ❌ Preload failed: \(error)")
+            logger.error("Preload failed: \(error)")
             onProgress(.error(String(String(describing: error).prefix(100))))
         }
     }

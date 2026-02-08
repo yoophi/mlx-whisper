@@ -21,6 +21,8 @@ macOS 메뉴바 음성 인식 앱. 글로벌 단축키로 음성을 녹음하고
 
 ## 빌드 & 실행
 
+### 터미널 (Make)
+
 ```bash
 cd VoiceRecorder
 
@@ -38,6 +40,55 @@ make install
 
 # 정리
 make clean
+```
+
+### Xcode
+
+```bash
+open VoiceRecorder/Package.swift
+```
+
+또는 Xcode에서 **File > Open** → `VoiceRecorder/Package.swift` 선택.
+
+1. 상단 Scheme에서 **VoiceRecorder**, Run Destination에서 **My Mac** 선택
+2. **Signing & Capabilities**에서 Team을 본인 Apple ID로 설정
+3. `Cmd+R`로 빌드 & 실행
+
+### 로깅
+
+기본적으로 Apple Unified Logging(`os.Logger`, subsystem: `com.voicerecorder.app`)을 사용합니다.
+
+#### 로그 확인 방법
+
+**터미널 — `log stream` (가장 간편):**
+
+```bash
+# VoiceRecorder 로그만 실시간 스트리밍
+log stream --predicate 'subsystem == "com.voicerecorder.app"' --level debug
+```
+
+**Console.app (GUI):**
+
+1. Console.app 실행 (`Cmd+Space` → "Console")
+2. 좌측에서 본인 Mac 선택
+3. 우측 상단 검색창에 `com.voicerecorder.app` 입력 → 필터에서 **Subsystem** 선택
+4. 메뉴 **Action > Include Debug Messages** 체크 (debug 레벨 포함)
+
+**Xcode:**
+
+Xcode에서 `Cmd+R`로 실행하면 하단 콘솔 창에 `os.Logger` 로그가 바로 표시됩니다.
+
+#### print 로거로 전환
+
+터미널에 `[Tag] ...` 형식으로 직접 출력하려면 `--print-log` 인자를 추가합니다:
+
+```bash
+# 터미널 직접 실행
+./VoiceRecorder.app/Contents/MacOS/VoiceRecorder --print-log
+
+# Xcode에서 설정
+# Product > Scheme > Edit Scheme (Cmd+<) > Run > Arguments > Arguments Passed On Launch
+# → --print-log 추가
 ```
 
 ## 권한 설정
@@ -112,31 +163,49 @@ make clean
 
 ## 프로젝트 구조
 
+Hexagonal Architecture (Ports & Adapters) 패턴을 따릅니다.
+
 ```
 VoiceRecorder/
-├── Package.swift                          # WhisperKit, HotKey 의존성
-├── Makefile                               # 빌드, 번들, 실행, 설치
+├── Package.swift                              # WhisperKit, HotKey 의존성
+├── Makefile                                   # 빌드, 번들, 실행, 설치
 └── Sources/VoiceRecorder/
     ├── App/
-    │   ├── main.swift                     # 진입점 (.accessory 모드)
-    │   └── AppDelegate.swift              # 컨트롤러 초기화
-    ├── Models/
-    │   ├── AppState.swift                 # 녹음/모델 상태
-    │   └── Language.swift                 # 언어 enum
-    ├── Config/
-    │   └── AppConfig.swift                # JSON 설정 로드/저장
-    ├── MenuBar/
-    │   └── StatusBarController.swift      # NSStatusItem + 녹음 오케스트레이션
-    ├── Audio/
-    │   └── AudioRecorder.swift            # AVAudioEngine 16kHz 모노 녹음
-    ├── Transcription/
-    │   └── WhisperTranscriber.swift       # WhisperKit 전사 (actor)
-    ├── Hotkey/
-    │   └── HotkeyManager.swift            # 글로벌 단축키 관리
-    ├── Clipboard/
-    │   └── ClipboardManager.swift         # 클립보드 + Cmd+V 시뮬레이션
-    └── Notifications/
-        └── NotificationManager.swift      # 알림 센터
+    │   ├── main.swift                         # 진입점 (.accessory 모드)
+    │   └── AppDelegate.swift                  # Composition Root
+    ├── Domain/
+    │   ├── Entities/
+    │   │   ├── Language.swift                 # 언어 enum
+    │   │   ├── RecordingStatus.swift          # 녹음 상태 enum
+    │   │   └── ModelStatus.swift              # 모델 상태 enum
+    │   ├── Ports/
+    │   │   ├── Driving/
+    │   │   │   └── RecordingControl.swift     # 인바운드 포트 (앱 구동)
+    │   │   └── Driven/
+    │   │       ├── AudioRecording.swift       # 오디오 녹음 포트
+    │   │       ├── Transcribing.swift         # 전사 포트
+    │   │       ├── ClipboardPasting.swift     # 클립보드 포트
+    │   │       ├── HotkeyRegistering.swift    # 단축키 포트
+    │   │       ├── Notifying.swift            # 알림 포트
+    │   │       ├── ConfigStoring.swift        # 설정 저장 포트
+    │   │       └── Logging.swift              # 로깅 포트
+    │   └── UseCases/
+    │       └── RecordAndTranscribeUseCase.swift  # 핵심 비즈니스 로직
+    └── Adapters/
+        ├── Inbound/
+        │   ├── StatusBarController.swift      # NSStatusItem UI
+        │   └── MenuBuilder.swift              # NSMenu 생성
+        └── Outbound/
+            ├── AudioRecorder.swift            # AVAudioEngine 16kHz 녹음
+            ├── WhisperTranscriber.swift        # WhisperKit 전사 (actor)
+            ├── ClipboardManager.swift         # 클립보드 + Cmd+V 시뮬레이션
+            ├── HotkeyManager.swift            # 글로벌 단축키 관리
+            ├── NotificationManager.swift      # 알림 센터
+            ├── AppConfig.swift                # JSON 설정 로드/저장
+            ├── AppState.swift                 # @MainActor 상태 관리
+            ├── UnifiedLogger.swift            # os.Logger 기반 (기본)
+            ├── PrintLogger.swift              # print() 기반 (--print-log)
+            └── LoggerFactory.swift            # 로거 생성 팩토리
 ```
 
 ## 기술 스택

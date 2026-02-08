@@ -1,6 +1,6 @@
 import Foundation
 
-struct AppConfig: Codable {
+struct AppConfig: Codable, ConfigStoring {
     var recordHotkey: String
     var langHotkey: String
     var language: String

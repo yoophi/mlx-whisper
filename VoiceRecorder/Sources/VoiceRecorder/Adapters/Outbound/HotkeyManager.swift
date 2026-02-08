@@ -2,44 +2,49 @@ import AppKit
 import Carbon.HIToolbox
 import HotKey
 
-final class HotkeyManager {
+final class HotkeyManager: HotkeyRegistering {
     private var recordHotKey: HotKey?
     private var langHotKey: HotKey?
+    private let logger: Logging
+
+    init(logger: Logging) {
+        self.logger = logger
+    }
 
     func registerRecordHotkey(_ hotkeyString: String, handler: @escaping () -> Void) {
         recordHotKey = nil
         guard let (key, modifiers) = parseHotkey(hotkeyString) else {
-            print("[Hotkey] ❌ Failed to parse record hotkey: \(hotkeyString)")
+            logger.error("Failed to parse record hotkey: \(hotkeyString)")
             return
         }
-        print("[Hotkey] Registering record hotkey: \(hotkeyString) → key=\(key), modifiers=\(modifiers.rawValue)")
+        logger.info("Registering record hotkey: \(hotkeyString)")
         let hk = HotKey(key: key, modifiers: modifiers)
-        hk.keyDownHandler = {
-            print("[Hotkey] 🔑 Record hotkey FIRED!")
+        hk.keyDownHandler = { [logger] in
+            logger.debug("Record hotkey FIRED!")
             handler()
         }
         recordHotKey = hk
-        print("[Hotkey] Record hotkey registered successfully")
+        logger.info("Record hotkey registered successfully")
     }
 
     func registerLangHotkey(_ hotkeyString: String, handler: @escaping () -> Void) {
         langHotKey = nil
         guard let (key, modifiers) = parseHotkey(hotkeyString) else {
-            print("[Hotkey] ❌ Failed to parse lang hotkey: \(hotkeyString)")
+            logger.error("Failed to parse lang hotkey: \(hotkeyString)")
             return
         }
-        print("[Hotkey] Registering lang hotkey: \(hotkeyString) → key=\(key), modifiers=\(modifiers.rawValue)")
+        logger.info("Registering lang hotkey: \(hotkeyString)")
         let hk = HotKey(key: key, modifiers: modifiers)
-        hk.keyDownHandler = {
-            print("[Hotkey] 🔑 Lang hotkey FIRED!")
+        hk.keyDownHandler = { [logger] in
+            logger.debug("Lang hotkey FIRED!")
             handler()
         }
         langHotKey = hk
-        print("[Hotkey] Lang hotkey registered successfully")
+        logger.info("Lang hotkey registered successfully")
     }
 
     func unregisterAll() {
-        print("[Hotkey] Unregistering all hotkeys")
+        logger.info("Unregistering all hotkeys")
         recordHotKey = nil
         langHotKey = nil
     }
@@ -69,7 +74,7 @@ final class HotkeyManager {
         }
 
         guard let kp = keyPart, let key = keyFromString(kp) else {
-            print("[Hotkey] ❌ Unknown key: \(keyPart ?? "nil") in \(hotkeyString)")
+            logger.error("Unknown key: \(keyPart ?? "nil") in \(hotkeyString)")
             return nil
         }
         return (key, modifiers)

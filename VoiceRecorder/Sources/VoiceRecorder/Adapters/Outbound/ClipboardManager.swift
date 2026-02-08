@@ -1,25 +1,28 @@
 import AppKit
 import Carbon.HIToolbox
 
-final class ClipboardManager {
+final class ClipboardManager: ClipboardPasting {
+    private let logger: Logging
 
-    /// 앱 시작 시 호출 — 접근성 권한이 없으면 시스템 허용 다이얼로그를 띄움
+    init(logger: Logging) {
+        self.logger = logger
+    }
+
     func requestAccessibilityIfNeeded() {
         let trusted = AXIsProcessTrusted()
-        print("[Clipboard] Accessibility permission: \(trusted ? "✅ granted" : "❌ not granted")")
+        logger.info("Accessibility permission: \(trusted ? "granted" : "not granted")")
 
         if !trusted {
-            // 시스템 설정 다이얼로그 표시
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
             AXIsProcessTrustedWithOptions(options)
-            print("[Clipboard] ⚠️ 접근성 권한 요청 다이얼로그를 표시했습니다.")
-            print("[Clipboard] ⚠️ 시스템 설정 > 개인정보 보호 > 접근성에서 VoiceRecorder를 허용하세요.")
+            logger.info("접근성 권한 요청 다이얼로그를 표시했습니다.")
+            logger.info("시스템 설정 > 개인정보 보호 > 접근성에서 VoiceRecorder를 허용하세요.")
         }
     }
 
     func copyAndPaste(_ text: String) {
         copyToClipboard(text)
-        print("[Clipboard] Copied \(text.count) chars")
+        logger.info("Copied \(text.count) chars")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.simulatePaste()
@@ -34,13 +37,12 @@ final class ClipboardManager {
 
     private func simulatePaste() {
         guard AXIsProcessTrusted() else {
-            print("[Clipboard] ❌ 접근성 권한 없음 — Cmd+V 시뮬레이션 불가")
-            print("[Clipboard] ❌ 시스템 설정 > 개인정보 보호 > 접근성에서 VoiceRecorder를 허용하세요.")
-            print("[Clipboard] 💡 텍스트는 클립보드에 복사되었습니다. 수동으로 Cmd+V로 붙여넣기 가능합니다.")
+            logger.error("접근성 권한 없음 — Cmd+V 시뮬레이션 불가")
+            logger.info("텍스트는 클립보드에 복사되었습니다. 수동으로 Cmd+V로 붙여넣기 가능합니다.")
             return
         }
 
-        print("[Clipboard] Simulating Cmd+V")
+        logger.debug("Simulating Cmd+V")
         let source = CGEventSource(stateID: .hidSystemState)
 
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true)

@@ -1,17 +1,22 @@
 import AVFoundation
 import Foundation
 
-final class AudioRecorder {
+final class AudioRecorder: AudioRecording {
     private let engine = AVAudioEngine()
     private var samples: [Float] = []
     private let lock = NSLock()
     private var isRecording = false
+    private let logger: Logging
+
+    init(logger: Logging) {
+        self.logger = logger
+    }
 
     func startRecording() throws {
         let inputNode = engine.inputNode
         let hwFormat = inputNode.outputFormat(forBus: 0)
 
-        print("[Audio] Hardware format: sampleRate=\(hwFormat.sampleRate), channels=\(hwFormat.channelCount)")
+        logger.info("Hardware format: sampleRate=\(hwFormat.sampleRate), channels=\(hwFormat.channelCount)")
 
         guard hwFormat.sampleRate > 0 else {
             throw AudioRecorderError.noInputDevice
@@ -65,7 +70,7 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         isRecording = true
-        print("[Audio] Engine started, recording...")
+        logger.info("Engine started, recording...")
     }
 
     func stopRecording() -> [Float] {
@@ -80,7 +85,7 @@ final class AudioRecorder {
         samples = []
         lock.unlock()
 
-        print("[Audio] Stopped. \(result.count) samples (\(String(format: "%.1f", Double(result.count) / 16000.0))s)")
+        logger.info("Stopped. \(result.count) samples (\(String(format: "%.1f", Double(result.count) / 16000.0))s)")
         return result
     }
 }
