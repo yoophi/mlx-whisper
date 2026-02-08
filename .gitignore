@@ -1,0 +1,12 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Swift
+VoiceRecorder/.build/
+VoiceRecorder/VoiceRecorder.app/
+Package.resolved
+
+# macOS
+.DS_Store
