@@ -52,6 +52,7 @@ final class StatusBarController: NSObject {
             toggleAction: #selector(toggleRecordingAction(_:)),
             setRecordHotkeyAction: #selector(setRecordHotkeyAction(_:)),
             setLanguageAction: #selector(setLanguageAction(_:)),
+            setModelAction: #selector(setModelAction(_:)),
             quitAction: #selector(quitAction(_:))
         )
     }
@@ -99,6 +100,18 @@ final class StatusBarController: NSObject {
         config.save()
         refreshUI()
         notifier.send(title: "음성 인식", body: "전사 언어: \(lang.displayName)")
+    }
+
+    @objc private func setModelAction(_ sender: NSMenuItem) {
+        guard let modelId = sender.representedObject as? String,
+              modelId != config.model else { return }
+        let label = MenuBuilder.availableModels.first(where: { $0.id == modelId })?.label ?? modelId
+        logger.info("Menu: set model → \(modelId)")
+        config.model = modelId
+        config.save()
+        refreshUI()
+        notifier.send(title: "음성 인식", body: "모델 변경: \(label)")
+        useCase.switchModel(to: modelId)
     }
 
     @objc private func quitAction(_ sender: NSMenuItem) {

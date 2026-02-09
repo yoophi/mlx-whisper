@@ -2,6 +2,13 @@ import AppKit
 
 @MainActor
 struct MenuBuilder {
+    static let availableModels: [(id: String, label: String)] = [
+        ("openai_whisper-large-v3_turbo", "large-v3-turbo (~1.5GB)"),
+        ("openai_whisper-large-v3_turbo_954MB", "large-v3-turbo 양자화 (~954MB)"),
+        ("openai_whisper-large-v3", "large-v3 (~3GB)"),
+        ("openai_whisper-large-v3_947MB", "large-v3 양자화 (~947MB)"),
+    ]
+
     static func build(
         appState: AppState,
         config: ConfigStoring,
@@ -9,6 +16,7 @@ struct MenuBuilder {
         toggleAction: Selector,
         setRecordHotkeyAction: Selector,
         setLanguageAction: Selector,
+        setModelAction: Selector,
         quitAction: Selector
     ) -> NSMenu {
         let menu = NSMenu()
@@ -76,6 +84,19 @@ struct MenuBuilder {
         let langMenuItem = NSMenuItem(title: "전사 언어", action: nil, keyEquivalent: "")
         langMenuItem.submenu = langSubmenu
         menu.addItem(langMenuItem)
+
+        // Model submenu
+        let modelSubmenu = NSMenu()
+        for (id, label) in availableModels {
+            let check = config.model == id ? "✓ " : "   "
+            let item = NSMenuItem(title: "\(check)\(label)", action: setModelAction, keyEquivalent: "")
+            item.target = target
+            item.representedObject = id
+            modelSubmenu.addItem(item)
+        }
+        let modelMenuItem = NSMenuItem(title: "음성 모델", action: nil, keyEquivalent: "")
+        modelMenuItem.submenu = modelSubmenu
+        menu.addItem(modelMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 

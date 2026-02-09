@@ -3,7 +3,7 @@ import WhisperKit
 
 actor WhisperTranscriber: Transcribing {
     private var whisperKit: WhisperKit?
-    private let modelName: String
+    private var modelName: String
     private var isLoading = false
     private let onProgress: @Sendable (ModelStatus) -> Void
     private let logger: Logging
@@ -90,6 +90,13 @@ actor WhisperTranscriber: Transcribing {
             logger.error("Preload failed: \(error)")
             onProgress(.error(String(String(describing: error).prefix(100))))
         }
+    }
+
+    func switchModel(to newModelName: String) async {
+        logger.info("Switching model: \(modelName) → \(newModelName)")
+        modelName = newModelName
+        whisperKit = nil
+        await preload()
     }
 }
 

@@ -54,6 +54,13 @@ final class RecordAndTranscribeUseCase: RecordingControl {
         }
     }
 
+    func switchModel(to modelName: String) {
+        let transcriber = self.transcriber
+        Task {
+            await transcriber.switchModel(to: modelName)
+        }
+    }
+
     // MARK: - Private
 
     private func startRecording() {
