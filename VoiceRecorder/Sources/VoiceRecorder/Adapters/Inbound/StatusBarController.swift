@@ -53,6 +53,7 @@ final class StatusBarController: NSObject {
             setRecordHotkeyAction: #selector(setRecordHotkeyAction(_:)),
             setLanguageAction: #selector(setLanguageAction(_:)),
             setModelAction: #selector(setModelAction(_:)),
+            setSaveDebugAudioFileAction: #selector(setSaveDebugAudioFileAction(_:)),
             quitAction: #selector(quitAction(_:))
         )
     }
@@ -112,6 +113,16 @@ final class StatusBarController: NSObject {
         refreshUI()
         notifier.send(title: "음성 인식", body: "모델 변경: \(label)")
         useCase.switchModel(to: modelId)
+    }
+
+    @objc private func setSaveDebugAudioFileAction(_ sender: NSMenuItem) {
+        guard let enabled = sender.representedObject as? Bool else { return }
+        logger.info("Menu: set save debug audio file → \(enabled)")
+        config.saveDebugAudioFile = enabled
+        config.save()
+        useCase.setSaveDebugAudioFile(enabled)
+        refreshUI()
+        notifier.send(title: "음성 인식", body: enabled ? "디버그 오디오 저장: 켜짐" : "디버그 오디오 저장: 꺼짐")
     }
 
     @objc private func quitAction(_ sender: NSMenuItem) {

@@ -17,6 +17,7 @@ struct MenuBuilder {
         setRecordHotkeyAction: Selector,
         setLanguageAction: Selector,
         setModelAction: Selector,
+        setSaveDebugAudioFileAction: Selector,
         quitAction: Selector
     ) -> NSMenu {
         let menu = NSMenu()
@@ -97,6 +98,22 @@ struct MenuBuilder {
         let modelMenuItem = NSMenuItem(title: "음성 모델", action: nil, keyEquivalent: "")
         modelMenuItem.submenu = modelSubmenu
         menu.addItem(modelMenuItem)
+
+        let debugSubmenu = NSMenu()
+        let debugOptions: [(Bool, String)] = [
+            (false, "저장 안 함"),
+            (true, "임시 파일 저장")
+        ]
+        for (enabled, label) in debugOptions {
+            let check = config.saveDebugAudioFile == enabled ? "✓ " : "   "
+            let item = NSMenuItem(title: "\(check)\(label)", action: setSaveDebugAudioFileAction, keyEquivalent: "")
+            item.target = target
+            item.representedObject = enabled
+            debugSubmenu.addItem(item)
+        }
+        let debugMenuItem = NSMenuItem(title: "디버그 오디오 저장", action: nil, keyEquivalent: "")
+        debugMenuItem.submenu = debugSubmenu
+        menu.addItem(debugMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 

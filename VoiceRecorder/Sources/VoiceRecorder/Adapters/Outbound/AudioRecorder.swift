@@ -7,6 +7,9 @@ final class AudioRecorder: AudioRecording {
     private let lock = NSLock()
     private var isRecording = false
     private let logger: Logging
+    
+    var onMicLevel: ((Float) -> Void)?
+    var saveDebugAudioFile: Bool = false
 
     init(logger: Logging) {
         self.logger = logger
@@ -64,6 +67,11 @@ final class AudioRecorder: AudioRecording {
                 self.lock.lock()
                 self.samples.append(contentsOf: newSamples)
                 self.lock.unlock()
+                
+                // 마이크 레벨 계산 및 콜백
+                let rms = sqrt(newSamples.reduce(0) { $0 + $1 * $1 } / Float(count))
+                let level = min(1.0, rms * 10) // 스케일링
+                self.onMicLevel?(level)
             }
         }
 
@@ -86,7 +94,61 @@ final class AudioRecorder: AudioRecording {
         lock.unlock()
 
         logger.info("Stopped. \(result.count) samples (\(String(format: "%.1f", Double(result.count) / 16000.0))s)")
+        
+        if saveDebugAudioFile && !result.isEmpty {
+            saveToWavFile(samples: result)
+        }
+        
         return result
+    }
+    
+    /// 녹음된 샘플을 WAV 파일로 저장
+    private func saveToWavFile(samples: [Float]) {
+        let tempDir = FileManager.default.temporaryDirectory
+        let fileName = "recording_\(Date().timeIntervalSince1970).wav"
+        let fileURL = tempDir.appendingPathComponent(fileName)
+        
+        do {
+            // WAV 파일 생성
+            let sampleRate: Double = 16000
+            let channels: UInt16 = 1
+            let bitsPerSample: UInt16 = 16
+            let byteRate = UInt32(sampleRate * Double(channels) * Double(bitsPerSample) / 8)
+            let blockAlign = UInt16(channels * bitsPerSample / 8)
+            let dataSize = UInt32(samples.count * 2) // 16-bit = 2 bytes per sample
+            
+            var data = Data()
+            
+            // RIFF header
+            data.append(contentsOf: "RIFF".utf8)
+            data.append(contentsOf: withUnsafeBytes(of: UInt32(36 + dataSize).littleEndian) { Array($0) })
+            data.append(contentsOf: "WAVE".utf8)
+            
+            // fmt chunk
+            data.append(contentsOf: "fmt ".utf8)
+            data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) }) // chunk size
+            data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // PCM format
+            data.append(contentsOf: withUnsafeBytes(of: channels.littleEndian) { Array($0) })
+            data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
+            data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
+            data.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Array($0) })
+            data.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Array($0) })
+            
+            // data chunk
+            data.append(contentsOf: "data".utf8)
+            data.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Array($0) })
+            
+            // PCM 데이터 (Float -> Int16)
+            for sample in samples {
+                let intSample = Int16(max(-1.0, min(1.0, sample)) * 32767.0)
+                data.append(contentsOf: withUnsafeBytes(of: intSample.littleEndian) { Array($0) })
+            }
+            
+            try data.write(to: fileURL)
+            logger.info("💾 Saved recording to: \(fileURL.path)")
+        } catch {
+            logger.error("Failed to save WAV file: \(error)")
+        }
     }
 }
 

@@ -75,7 +75,16 @@ actor WhisperTranscriber: Transcribing {
             throw TranscriberError.modelNotLoaded
         }
 
-        let options = DecodingOptions(language: language)
+        // 환각(hallucination) 방지를 위한 임계값 설정
+        let options = DecodingOptions(
+            language: language,
+            temperature: 0.0,
+            skipSpecialTokens: true,
+            withoutTimestamps: true,
+            compressionRatioThreshold: 2.4,
+            logProbThreshold: -1.0,
+            noSpeechThreshold: 0.6
+        )
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
 
         let text = results.map { $0.text }.joined(separator: " ")

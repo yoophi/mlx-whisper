@@ -8,6 +8,7 @@ final class RecordAndTranscribeUseCase: RecordingControl {
     private let clipboard: ClipboardPasting
     private let notifier: Notifying
     private let logger: Logging
+    private let overlay: OverlayManaging
 
     var onStateChanged: (() -> Void)?
 
@@ -17,7 +18,8 @@ final class RecordAndTranscribeUseCase: RecordingControl {
         transcriber: any Transcribing,
         clipboard: ClipboardPasting,
         notifier: Notifying,
-        logger: Logging
+        logger: Logging,
+        overlay: OverlayManaging
     ) {
         self.appState = appState
         self.audioRecorder = audioRecorder
@@ -25,6 +27,7 @@ final class RecordAndTranscribeUseCase: RecordingControl {
         self.clipboard = clipboard
         self.notifier = notifier
         self.logger = logger
+        self.overlay = overlay
     }
 
     // MARK: - RecordingControl
@@ -61,6 +64,11 @@ final class RecordAndTranscribeUseCase: RecordingControl {
         }
     }
 
+    func setSaveDebugAudioFile(_ enabled: Bool) {
+        audioRecorder.saveDebugAudioFile = enabled
+        logger.info("Debug audio save: \(enabled ? "enabled" : "disabled")")
+    }
+
     // MARK: - Private
 
     private func startRecording() {
@@ -76,6 +84,7 @@ final class RecordAndTranscribeUseCase: RecordingControl {
         }
 
         appState.recordingStatus = .recording
+        overlay.showRecording()
         onStateChanged?()
         logger.info("Recording started")
     }
@@ -90,11 +99,13 @@ final class RecordAndTranscribeUseCase: RecordingControl {
         guard !samples.isEmpty else {
             logger.info("No samples recorded")
             appState.recordingStatus = .idle
+            overlay.hide()
             onStateChanged?()
             return
         }
 
         appState.recordingStatus = .processing
+        overlay.showProcessing()
         onStateChanged?()
 
         transcribeAndPaste(samples, language: language)
@@ -132,6 +143,7 @@ final class RecordAndTranscribeUseCase: RecordingControl {
 
             await MainActor.run { [weak self] in
                 self?.appState.recordingStatus = .idle
+                self?.overlay.hide()
                 self?.onStateChanged?()
                 logger.info("Back to idle")
             }

@@ -5,12 +5,16 @@ struct AppConfig: Codable, ConfigStoring {
     var langHotkey: String
     var language: String
     var model: String
+    var overlayPosition: String
+    var saveDebugAudioFile: Bool
 
     enum CodingKeys: String, CodingKey {
         case recordHotkey = "record_hotkey"
         case langHotkey = "lang_hotkey"
         case language
         case model
+        case overlayPosition = "overlay_position"
+        case saveDebugAudioFile = "save_debug_audio_file"
         // Legacy key
         case hotkey
     }
@@ -19,7 +23,9 @@ struct AppConfig: Codable, ConfigStoring {
         recordHotkey: "ctrl+shift+m",
         langHotkey: "cmd+shift+space",
         language: "ko",
-        model: "openai_whisper-large-v3_turbo"
+        model: "openai_whisper-large-v3_turbo",
+        overlayPosition: "bottom",
+        saveDebugAudioFile: false
     )
 
     static var configDirectory: URL {
@@ -32,11 +38,20 @@ struct AppConfig: Codable, ConfigStoring {
         configDirectory.appendingPathComponent("config.json")
     }
 
-    init(recordHotkey: String, langHotkey: String, language: String, model: String) {
+    init(
+        recordHotkey: String,
+        langHotkey: String,
+        language: String,
+        model: String,
+        overlayPosition: String,
+        saveDebugAudioFile: Bool
+    ) {
         self.recordHotkey = recordHotkey
         self.langHotkey = langHotkey
         self.language = language
         self.model = model
+        self.overlayPosition = overlayPosition
+        self.saveDebugAudioFile = saveDebugAudioFile
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +66,8 @@ struct AppConfig: Codable, ConfigStoring {
         self.langHotkey = try container.decodeIfPresent(String.self, forKey: .langHotkey) ?? defaults.langHotkey
         self.language = try container.decodeIfPresent(String.self, forKey: .language) ?? defaults.language
         self.model = try container.decodeIfPresent(String.self, forKey: .model) ?? defaults.model
+        self.overlayPosition = try container.decodeIfPresent(String.self, forKey: .overlayPosition) ?? defaults.overlayPosition
+        self.saveDebugAudioFile = try container.decodeIfPresent(Bool.self, forKey: .saveDebugAudioFile) ?? defaults.saveDebugAudioFile
     }
 
     func encode(to encoder: Encoder) throws {
@@ -59,6 +76,8 @@ struct AppConfig: Codable, ConfigStoring {
         try container.encode(langHotkey, forKey: .langHotkey)
         try container.encode(language, forKey: .language)
         try container.encode(model, forKey: .model)
+        try container.encode(overlayPosition, forKey: .overlayPosition)
+        try container.encode(saveDebugAudioFile, forKey: .saveDebugAudioFile)
     }
 
     static func load() -> AppConfig {
@@ -69,11 +88,11 @@ struct AppConfig: Codable, ConfigStoring {
         do {
             let data = try Data(contentsOf: path)
             let config = try JSONDecoder().decode(AppConfig.self, from: data)
-            // Ensure non-empty hotkeys
-            var result = config
-            if result.recordHotkey.isEmpty { result.recordHotkey = defaultConfig.recordHotkey }
-            if result.langHotkey.isEmpty { result.langHotkey = defaultConfig.langHotkey }
-            return result
+        var result = config
+        if result.recordHotkey.isEmpty { result.recordHotkey = defaultConfig.recordHotkey }
+        if result.langHotkey.isEmpty { result.langHotkey = defaultConfig.langHotkey }
+        if result.overlayPosition.isEmpty { result.overlayPosition = defaultConfig.overlayPosition }
+        return result
         } catch {
             print("Failed to load config: \(error). Using defaults.")
             return defaultConfig

@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notificationManager.requestPermission()
 
         let audioRecorder = AudioRecorder(logger: LoggerFactory.make(tag: "Audio"))
+        audioRecorder.saveDebugAudioFile = config.saveDebugAudioFile
         let clipboardManager = ClipboardManager(logger: LoggerFactory.make(tag: "Clipboard"))
         clipboardManager.requestAccessibilityIfNeeded()
         let hotkeyManager = HotkeyManager(logger: LoggerFactory.make(tag: "Hotkey"))
@@ -32,13 +33,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // OverlayManager 생성
+        let overlayPosition = OverlayPosition(rawValue: config.overlayPosition) ?? .bottom
+        let overlayManager = OverlayManager(position: overlayPosition)
+        
+        // 마이크 레벨을 오버레이에 연결
+        audioRecorder.onMicLevel = { [weak overlayManager] level in
+            Task { @MainActor in
+                overlayManager?.updateMicLevel(level)
+            }
+        }
+
         let uc = RecordAndTranscribeUseCase(
             appState: appState,
             audioRecorder: audioRecorder,
             transcriber: transcriber,
             clipboard: clipboardManager,
             notifier: notificationManager,
-            logger: LoggerFactory.make(tag: "Recording")
+            logger: LoggerFactory.make(tag: "Recording"),
+            overlay: overlayManager
         )
         useCase = uc
 
